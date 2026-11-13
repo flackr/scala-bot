@@ -115,9 +115,10 @@ def refreshWCs(prev: HGroup, game: HGroup, action: Action, beforeClueInterp: Boo
 
 			case UpdateResult.Demonstrated(nextIndex, skipped) =>
 				val isBluff = wc.currConn.matchesP { case f: FinesseConn if f.isBluff => true }
+				val bluffResolved = isBluff && nextIndex.forall(i => !conns.drop(i).exists(_.isInstanceOf[FinesseConn]))
 
 				struct.copy(
-					wcs = if isBluff then struct.wcs else nextIndex.fold(struct.wcs)(i => struct.wcs :+ wc.copy(connections = conns.drop(i))),
+					wcs = if bluffResolved then struct.wcs else nextIndex.fold(struct.wcs)(i => struct.wcs :+ wc.copy(connections = conns.drop(i))),
 					toRemove = struct.toRemove :++ (if !skipped then struct.toRemove else nextIndex.fold(conns)(conns.take)),
 					demos = struct.demos :+ nextIndex.fold(wc)(i => wc.copy(connections = conns.drop(i)))
 				)
@@ -135,7 +136,13 @@ def refreshWCs(prev: HGroup, game: HGroup, action: Action, beforeClueInterp: Boo
 		acc + (order -> (acc.getOrElse(order, IdentitySet.empty).union(wc.inference)))
 
 	val (retainWCs, nonDemoedWCs) = newWCs.partition: wc =>
-		demoIds.get(wc.focus).isEmpty || demos.contains(wc)
+		demoIds.get(wc.focus).isEmpty ||
+		demos.contains(wc) || (
+			game.level >= Level.DoubleBluffs &&
+			wc.ambiguousSelf &&
+			wc.connections.headOption.exists(c => game.state.hands(c.reacting).contains(c.order)) &&
+			newWCs.exists(w => w != wc && w.focus == wc.focus && w.inference == wc.inference && w.connections.exists(_.isBluff))
+		)
 		// demoIds.get(wc.focus).forall(_.contains(wc.inference))
 
 	demoIds.foldLeft(newGame) { case (acc, (order, ids)) =>
@@ -255,7 +262,14 @@ def updateWc(prev: HGroup, game: HGroup, action: Action, wc: WaitingConnection, 
 		case f: FinesseConn if f.inverted =>
 			game.common.thoughts(f.order).possible.intersect(state.trashSet.union(f.ids)).isEmpty
 		case f: FinesseConn if f.isBluff =>
-			game.common.thoughts(f.order).possible.intersect(prev.state.playableSet).isEmpty
+			val playableIds =
+				if f == wc.currConn then
+					prev.state.playableSet
+				else
+					prev.state.playableSet
+						.union(game.state.playableSet)
+						.union(wc.currConn.ids.filter(prev.state.isPlayable).flatMap(_.next))
+			game.common.thoughts(f.order).possible.intersect(playableIds).isEmpty
 		case conn =>
 			game.common.thoughts(conn.order).possible.intersect(conn.ids).isEmpty
 
@@ -282,7 +296,17 @@ def updateWc(prev: HGroup, game: HGroup, action: Action, wc: WaitingConnection, 
 		UpdateResult.Remove
 
 	else if (wc.ambiguousSelf && wc.currConn.reacting == state.ourPlayerIndex) || beforeClueInterp then
-		UpdateResult.Keep
+		val halfFinesseSelfAdvance =
+			!beforeClueInterp &&
+			game.level >= Level.DoubleBluffs &&
+			!wc.currConn.hidden &&
+			action.matchesP { case PlayAction(_, o, s, r) => o == wc.currConn.order && s != -1 && r != -1 && wc.currConn.ids.contains(Identity(s, r)) } &&
+			prev.waiting.exists(w => w.focus == wc.focus && w.inference == wc.inference && w.currConn.isBluff && w.connections.count(_.isInstanceOf[FinesseConn]) >= 2)
+
+		if halfFinesseSelfAdvance then
+			wc.getNextIndex(state).fold(UpdateResult.Keep)(UpdateResult.Advance(_, skipped = false))
+		else
+			UpdateResult.Keep
 
 	else if otherPlay(game, action, wc) then
 		Log.highlight(Console.CYAN, s"${state.names(action.playerIndex)} played connecting card, continuing")

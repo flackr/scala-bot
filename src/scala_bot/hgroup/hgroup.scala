@@ -38,6 +38,7 @@ object Level:
 	val Context = 12
 	val IntermediateBluffs = 13
 	val TrashMoves = 14
+	val DoubleBluffs = 15
 
 enum FStatus:
 	/** The card may be part of an *Ambiguous Finesse* on the player. */

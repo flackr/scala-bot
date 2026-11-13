@@ -120,6 +120,7 @@ def occamsRazor(ctx: ClueContext, fps: Seq[FocusPossibility], playerIndex: Int, 
 		// starting with the same self-finesse is equally simple.
 		val sameSelfStart = fps.filter: fp =>
 			!simplest.contains(fp) &&
+			!(game.level >= Level.DoubleBluffs && fp.isBluff && fp.connections.count(_.isInstanceOf[FinesseConn]) >= 2) &&
 			simplest.exists: s =>
 				s.connections.existsM:
 					case c: FinesseConn => c.reacting == playerIndex && nextUnknown(fp).exists(_.order == c.order)

@@ -17,28 +17,34 @@ def isIntermediateBluffTarget(prev: HGroup, game: HGroup, action: ClueAction, id
 		(clue.kind == ClueKind.Colour && !prev.state.deck(focus).clued && id.rank != 5 && state.isCritical(id))
 	)
 
+def bluffDisconnect(game: HGroup, clue: BaseClue, blind: Identity, focus: Int): Boolean =
+	if clue.kind == ClueKind.Rank then
+		clue.value != blind.rank + 1 ||
+		blind.next.forall(!game.common.thoughts(focus).possible.contains(_))
+	else
+		!game.common.thoughts(focus).possible.exists(i => i.suitIndex == blind.suitIndex && i.rank > blind.rank)
+
+def doubleBluffDisconnect(game: HGroup, clue: BaseClue, blind2: Identity, focus: Int): Boolean =
+	game.state.isPlayable(blind2) || bluffDisconnect(game, clue, blind2, focus)
+
+def bluffInterferes(game: HGroup, reacting: Int): Boolean =
+	game.state.hands(reacting).exists: o =>
+		// game.players(reacting).thoughts(o).possible.contains(truth) &&	// any f/gd should block a bluff
+		(game.isBlindPlaying(o) || game.meta(o).status == CardStatus.GentlemansDiscard)
+
 def validBluff(game: HGroup, action: ClueAction, blind: Identity, reacting: Int, connected: FastBitSet, symmetric: Boolean = false) =
 	val state = game.state
 	val ClueAction(giver, target, _, clue) = action
 	val focus = connected.head
 
-	lazy val disconnect = symmetric ||
-		(if clue.kind == ClueKind.Rank then
-			clue.value != blind.rank + 1 ||
-			blind.next.forall(!game.common.thoughts(focus).possible.contains(_))
-		else
-			!game.common.thoughts(focus).possible.exists(i => i.suitIndex == blind.suitIndex && i.rank > blind.rank))
-
-	val interferes = state.hands(reacting).find: o =>
-		// game.players(reacting).thoughts(o).possible.contains(truth) &&	// any f/gd should block a bluff
-		(game.isBlindPlaying(o) || game.meta(o).status == CardStatus.GentlemansDiscard)
+	lazy val disconnect = symmetric || bluffDisconnect(game, clue, blind, focus)
 
 	game.level >= Level.Bluffs &&
 	state.nextPlayerIndex(giver) == reacting &&
 	connected.size == 1 &&
 	disconnect &&
 	!(clue.kind == ClueKind.Colour && reacting == target) &&	// not self-colour bluff
-	interferes.isEmpty
+	!bluffInterferes(game, reacting)
 
 /** Returns whether the colour clue could be a save on the given identity. */
 def colourSave(prev: HGroup, action: ClueAction, id: Identity, focus: Int): Boolean =

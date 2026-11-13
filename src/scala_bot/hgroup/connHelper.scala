@@ -23,6 +23,15 @@ def assignConns(game: HGroup, action: ClueAction, fps: Seq[FocusPossibility], fo
 
 	// Don't assign symmetric/ambiguous/save connections
 	val toAssign = fps.filterNot(fp => fp.symmetric || fp.ambiguous || fp.save || fp.complicated)
+	val doubleBluffOrders =
+		if game.level < Level.DoubleBluffs then FastBitSet.empty
+		else FastBitSet.from:
+			for
+				fp <- toAssign
+				if fp.isBluff && fp.connections.count(_.isInstanceOf[FinesseConn]) >= 2
+				case f: FinesseConn <- fp.connections
+				if f.bluff
+			yield f.order
 	val modified = scala.collection.mutable.Set.empty[Int]
 	val shifted = scala.collection.mutable.Set.empty[Int]
 
@@ -146,7 +155,9 @@ def assignConns(game: HGroup, action: ClueAction, fps: Seq[FocusPossibility], fo
 				conn match
 					case f: FinesseConn =>
 						val status =
-							if f.possiblyBluff then
+							if doubleBluffOrders.contains(conn.order) then
+								CardStatus.Bluffed
+							else if f.possiblyBluff then
 								if conn.reacting == state.ourPlayerIndex then
 									CardStatus.FMaybeBluffed
 								else
@@ -369,10 +380,10 @@ def resolveClue(ctx: ClueContext, fps: Seq[FocusPossibility], symmetricInterp: S
 				holder != giver && !game.chop(holder).contains(d)
 
 	lazy val delayedBluff = trueFp.flatMap: trueFp =>
-		Option.when(trueFp.isBluff && trueFp.connections.head.reacting == target):
+		if trueFp.isBluff && trueFp.connections.head.reacting == target then
 			val reacting = trueFp.connections.head.reacting
 
-			(fps ++ symmetricFps).filter: fp =>
+			Some((fps ++ symmetricFps).filter: fp =>
 				// !simplestFps.contains(fp) &&
 				fp.connections.headOption.exists: conn =>
 					conn.reacting != reacting ||
@@ -380,6 +391,18 @@ def resolveClue(ctx: ClueContext, fps: Seq[FocusPossibility], symmetricInterp: S
 					conn.isInstanceOf[PlayableConn]
 				&&
 				fpSimplicity(state, fp, reacting, state.ourPlayerIndex) <= fpSimplicity(state, trueFp, reacting, state.ourPlayerIndex)
+			)
+		else if game.level >= Level.DoubleBluffs && trueFp.isBluff && trueFp.connections.lift(1).exists(c => c.isBluff && c.reacting == target) then
+			val bobConn = trueFp.connections.head
+			val afterBobTrue = trueFp.copy(connections = trueFp.connections.drop(1))
+
+			Some((fps ++ symmetricFps).filter: fp =>
+				game.players(target).thoughts(focus).possible.contains(fp.id) &&
+				fp.connections.headOption.exists(_.order == bobConn.order) &&
+				fpSimplicity(state, fp.copy(connections = fp.connections.drop(1)), target, state.ourPlayerIndex) < fpSimplicity(state, afterBobTrue, target, state.ourPlayerIndex)
+			)
+		else
+			None
 
 	lazy val badAsymmetry = symmetricInterp match
 		case SymmetricInterp.NoInterp => false

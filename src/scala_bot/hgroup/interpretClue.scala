@@ -228,7 +228,7 @@ def interpNormalClue(ctx: ClueContext, symmetricInterp: SymmetricInterp, thinksS
 		.flatMap:
 			connect(ctx, _, initialLooksDirect, thinksStall)
 
-	val hasNormalBluff = normalFocusPoss.exists(_.isBluff)
+	val hasNormalBluff = normalFocusPoss.exists(fp => fp.isBluff && fp.connections.count(_.isInstanceOf[FinesseConn]) == 1)
 	val rawTrashFocusPoss = connectTrashFinesses(ctx, initialLooksDirect, thinksStall).filterNot: fp =>
 		hasNormalBluff && fp.connections.headOption.exists(c => c.isInstanceOf[FinesseConn] && c.reacting == state.nextPlayerIndex(giver))
 
