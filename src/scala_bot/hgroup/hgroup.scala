@@ -39,6 +39,7 @@ object Level:
 	val IntermediateBluffs = 13
 	val TrashMoves = 14
 	val DoubleBluffs = 15
+	val Ejections = 16
 
 enum FStatus:
 	/** The card may be part of an *Ambiguous Finesse* on the player. */
@@ -52,7 +53,11 @@ case class XConvData(
 	fStatus: Seq[FStatus] = Nil,
 	turnFinessed: Option[Int] = None,
 	/** The valid identities of the card that were promised when it was finessed, if they exist. */
-	finesseIds: Option[IdentitySet] = None
+	finesseIds: Option[IdentitySet] = None,
+	/** The turn this card was discharged via UTD or UDD, if any. */
+	discharged: Option[Int] = None,
+	/** In a confirmed 2-card UDD, the focused order that this card duplicates. */
+	uddPartner: Option[Int] = None
 )
 
 case class HGroup(
@@ -93,6 +98,19 @@ case class HGroup(
 ) extends Game:
 	val goodTouch = true
 
+	override def isConvTrash(player: Player, order: Int): Boolean =
+		xmeta(order).uddPartner.exists(partner => state.hands(state.holderOf(order)).contains(partner))
+
+	override def orderTrashCards(player: Player, playerIndex: Int, orders: Vector[Int]): Vector[Int] =
+		if level < Level.Ejections || !orders.exists(xmeta(_).discharged.isDefined) then
+			orders
+		else
+			val (discharged, rest) = orders.partition(xmeta(_).discharged.isDefined)
+			discharged ++ rest
+
+	override def hasPendingTrashWc(order: Int): Boolean =
+		waiting.exists(w => w.focus == order && w.discharge && (!w.symmetric || w.target == state.ourPlayerIndex))
+
 	override def filterPlayables(player: Player, playerIndex: Int, orders: Seq[Int], assume: Boolean = true) =
 		val unknown1s = orders.filter(this.unknown1)
 		val next1 = this.next1(unknown1s)
@@ -109,6 +127,8 @@ case class HGroup(
 					state.deck(o).clued &&
 					state.hands(playerIndex).exists: o2 =>
 						meta(o2).focused &&
+						!meta(o2).trash &&
+						meta(o2).status != CardStatus.CalledToDiscard &&
 						player.thoughts(o).inferred == player.thoughts(o2).inferred &&
 						state.deck(o).clues.forall(clue => state.deck(o2).clues.exists(_.isEq(clue)))
 
@@ -267,6 +287,18 @@ case class HGroup(
 			(status != CardStatus.Finessed || this.xmeta(o).fStatus.contains(FStatus.PossiblyOn(state.ourPlayerIndex)))
 
 		order.filter(!ignore.contains(_))
+
+	def findNthFinesse(playerIndex: Int, n: Int, connected: FastBitSet = FastBitSet.empty, ignore: FastBitSet = FastBitSet.empty): Option[Int] =
+		@annotation.tailrec
+		def step(rem: Int, accConn: FastBitSet, last: Option[Int]): Option[Int] =
+			if rem == 0 then
+				last
+			else
+				findFinesse(playerIndex, accConn, ignore) match
+					case Some(o) => step(rem - 1, accConn.incl(o), Some(o))
+					case None    => None
+
+		if n <= 0 then None else step(n, connected, None)
 
 	def findFinesseId(playerIndex: Int, id: Identity, connected: FastBitSet = FastBitSet.empty, ignore: FastBitSet = FastBitSet.empty, overrideLayer: Boolean = false): Option[Int] =
 		val order = state.hands(playerIndex).find: o =>
@@ -611,8 +643,10 @@ case class HGroup(
 				}
 			}
 		.sortBy: o =>
-			// Discard leftmost clued trash (largest order), then rightmost unclued trash (smallest order)
-			if state.deck(o).clued then -o else o
+			// Discard discharged focus first, then leftmost clued trash (largest order), then rightmost unclued trash (smallest order)
+			if xmeta(o).discharged.isDefined then (-2, -o)
+			else if state.deck(o).clued then (-1, -o)
+			else (0, o)
 
 	/** Returns a potential clandestine finesse that may alter the id of the card with the given order.
 	  * @example See test "waits for a clandestine finesse to resolve".
@@ -841,6 +875,7 @@ object HGroup:
 				.copy(dcStatus = DcStatus.None)
 				.checkDDA(playerIndex, Identity(suitIndex, rank))
 				.withMove(DiscardInterp.None)
+			.pipe(resolveDischargedDiscard(prev, _, action))
 			.when(_.inEarlyGame): g =>
 				// Bombing an inverted card on chop ends early game
 				val endEarlyGame = (!failed || (prev.chop(playerIndex).contains(order) && g.state.isInverted(Identity(suitIndex, rank)))) &&
@@ -1133,8 +1168,12 @@ object HGroup:
 				.flatMap(state.allValidClues)
 				.partition: clue =>
 					val list = state.clueTouched(state.hands(clue.target), clue)
-					list.exists: o =>
-						state.deck(o).id().exists(state.isUseful)
+					list.exists(o => state.deck(o).id().exists(state.isUseful)) || (
+						game.level >= Level.Ejections &&
+						state.numPlayers >= 3 &&
+						state.nextPlayerIndex(giver) != clue.target &&
+						game.findNthFinesse(state.nextPlayerIndex(giver), 3).exists(state.deck(_).id().exists(state.isPlayable))
+					)
 				.pipe: (useful, useless) =>
 					if useful.isEmpty then
 						val validClue = useless.find(clueValue(_) > -11)

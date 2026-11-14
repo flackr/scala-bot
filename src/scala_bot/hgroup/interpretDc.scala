@@ -228,6 +228,8 @@ def interpretUsefulDcH(ctx: DiscardContext): Option[HGroup] =
 		suitIndex != -1 && rank != -1 &&
 		!state.isBasicTrash(id) &&
 		!prev.meta(order).trash &&
+		!prev.xmeta(order).discharged.isDefined &&
+		!prev.xmeta(order).uddPartner.isDefined &&
 		prev.isTouched(order) && {
 			val dupe = (0 until state.numPlayers).find: i =>
 				state.hands(i).exists: o =>
@@ -334,7 +336,10 @@ private def checkSdcm(prev: HGroup, game: Game, action: DiscardAction): Option[D
 	val ocm = prev.level >= Level.TrashMoves &&
 		common.thinksTrash(prev, playerIndex).indexOf(order) > 0 && (
 			shout ||
-			(state.deck(order).clued && common.thinksPlayables(prev, playerIndex).isEmpty)
+			(state.deck(order).clued && (
+				common.thinksPlayables(prev, playerIndex).isEmpty ||
+				(prev.level >= Level.Ejections && prev.xmeta(order).uddPartner.isDefined && common.thinksPlayables(prev, playerIndex).forall(_ == order))
+			))
 		)
 
 	if common.thinksLocked(prev, bob) && state.clueTokens == 0 && !ocm then
@@ -471,7 +476,7 @@ private def checkPosDc(ctx: DiscardContext): PosDcResult =
 
 	val expectedDc = prev.common.thinksTrash(prev, playerIndex)
 		.filter(state.deck(_).clued)
-		.maxOption
+		.pipe(ts => ts.find(prev.xmeta(_).discharged.isDefined).orElse(ts.maxOption))
 		.orElse(prev.chop(playerIndex))
 
 	// Locked hand, blind played a chop moved card that could be good, discarded expected card
@@ -569,3 +574,61 @@ def interpretPosDc(ctx: DiscardContext): Option[HGroup] =
 						dda = None
 					)
 					.withMove(DiscardInterp.Positional)
+
+def resolveDischargedDiscard(prev: HGroup, game: HGroup, action: DiscardAction): HGroup =
+	val DiscardAction(playerIndex, order, suitIndex, rank, failed) = action
+	if game.level < Level.Ejections || failed || suitIndex == -1 || rank == -1 || game.lastMove == Some(DiscardInterp.Mistake) then
+		return game
+
+	val id = Identity(suitIndex, rank)
+
+	if prev.xmeta(order).discharged.isDefined then
+		val cleared = game.state.hands(playerIndex).foldLeft(game): (acc, o) =>
+			if acc.xmeta(o).uddPartner.contains(order) then
+				acc.withXMeta(o)(_.copy(uddPartner = None))
+			else
+				acc
+
+		if cleared.state.isBasicTrash(id) then
+			cleared
+		else
+			val candidates = cleared.state.hands(playerIndex).filter: o =>
+				cleared.isTouched(o) &&
+				cleared.common.thoughts(o).possible.contains(id)
+
+			val updated =
+				if candidates.length == 1 then
+					val single = IdentitySet.single(id)
+					cleared.withThought(candidates.head)(_.copy(inferred = single, infoLock = single.toOpt))
+				else if candidates.length >= 2 then
+					val bs = FastBitSet.from(candidates)
+					val alreadyLinked = cleared.common.links.exists:
+						case Link.Sarcastic(orders, linkId) => orders == bs && linkId == id
+						case _ => false
+					if alreadyLinked then
+						cleared
+					else
+						cleared.copy(common = cleared.common.copy(links = Link.Sarcastic(bs, id) +: cleared.common.links))
+				else
+					cleared
+
+			if updated.dda.contains(id) then updated.copy(dda = None) else updated
+
+	else if prev.xmeta(order).uddPartner.isDefined then
+		val focusOrder = prev.xmeta(order).uddPartner.get
+		val updated =
+			if game.state.hands(playerIndex).contains(focusOrder) then
+				val single = IdentitySet.single(id)
+				game.withXMeta(focusOrder)(_.copy(discharged = None))
+					.withMeta(focusOrder): m =>
+						m.copy(
+							trash = false,
+							status = if m.status == CardStatus.CalledToDiscard then CardStatus.None else m.status
+						)
+					.withThought(focusOrder)(_.copy(inferred = single, infoLock = single.toOpt))
+			else
+				game
+
+		if updated.dda.contains(id) then updated.copy(dda = None) else updated
+	else
+		game

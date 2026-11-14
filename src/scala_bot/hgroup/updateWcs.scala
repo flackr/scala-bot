@@ -124,8 +124,9 @@ def refreshWCs(prev: HGroup, game: HGroup, action: Action, beforeClueInterp: Boo
 				)
 			case UpdateResult.Remove =>
 				if hypo.isDefined then struct else
+					val focusPrompt = if wc.removeInf then List(PromptConn(-1, wc.focus, wc.inference)) else Nil
 					struct.copy(
-						toRemove = struct.toRemove :++ PromptConn(-1, wc.focus, wc.inference) +: (if wc.symmetric || wc.ambiguousSelf then Nil else conns),
+						toRemove = struct.toRemove :++ focusPrompt :++ (if wc.symmetric || wc.ambiguousSelf then Nil else conns),
 						remFocuses = struct.remFocuses + wc.focus
 					)
 			case UpdateResult.Complete => struct
@@ -196,9 +197,12 @@ def refreshWCs(prev: HGroup, game: HGroup, action: Action, beforeClueInterp: Boo
 							)
 					case _ => acc
 				case _ =>
-					val shared = !conn.matchesP { case f: FinesseConn => f.isBluff } && retainWCs.exists: wc =>
-						(wc.focus == conn.order && conn.ids.forall(_ == wc.inference)) ||
-						(wc.connections.exists(c => c.order == conn.order && c.ids.length == conn.ids.length && c.ids.forall(conn.ids.contains)))
+					val shared = !conn.matchesP { case f: FinesseConn => f.isBluff } && (
+						(conn.reacting == -1 && demoIds.get(conn.order).exists(ids => conn.ids.forall(ids.contains))) ||
+						retainWCs.exists: wc =>
+							(wc.focus == conn.order && conn.ids.forall(_ == wc.inference)) ||
+							(wc.connections.exists(c => c.order == conn.order && c.ids.length == conn.ids.length && c.ids.forall(conn.ids.contains)))
+					)
 
 					if shared || conn.isInstanceOf[KnownConn] || conn.isInstanceOf[PlayableConn] then
 						acc
@@ -218,7 +222,7 @@ def refreshWCs(prev: HGroup, game: HGroup, action: Action, beforeClueInterp: Boo
 					val ambiguousWcs = sameFocusWcs.filter(_.ambiguousSelf)
 
 					Log.error(s"assigning previously-ambiguous connections on $focus to ${ambiguousWcs.map(w => g.state.logId(w.inference))}")
-					val assigned = assignConns(currGame, action, ambiguousWcs.map(wc => FocusPossibility(wc.inference, wc.connections, ClueInterp.Play, symmetric = wc.symmetric, trashFinesse = wc.trashFinesse, needsBlindPlay = wc.needsBlindPlay)), focus, retroactive = true)
+					val assigned = assignConns(currGame, action, ambiguousWcs.map(wc => FocusPossibility(wc.inference, wc.connections, ClueInterp.Play, symmetric = wc.symmetric, trashFinesse = wc.trashFinesse, needsBlindPlay = wc.needsBlindPlay, discharge = wc.discharge)), focus, retroactive = true)
 						.withThought(focus): t =>
 							t.copy(inferred = t.possible.intersect(ambiguousWcs.map(_.inference)))
 					(assigned, disambiguatedWcs ++ ambiguousWcs)
@@ -226,23 +230,58 @@ def refreshWCs(prev: HGroup, game: HGroup, action: Action, beforeClueInterp: Boo
 					acc
 
 			val g3 = game.waiting.find(w => w.focus == focus && w.trashFinesse) match
-				case Some(wc) if !sameFocusWcs.exists(w => w.trashFinesse && (!w.symmetric || w.target == game.state.ourPlayerIndex)) =>
+				case Some(wc) if !demos.exists(w => w.focus == focus && w.trashFinesse) && !sameFocusWcs.exists(w => w.trashFinesse && (!w.symmetric || w.target == game.state.ourPlayerIndex)) =>
 					val base = g2.withMeta(focus)(_.copy(trash = false))
 						.withThought(focus)(t => t.copy(infoLock = t.inferred.toOpt))
-					game.state.hands(wc.target).foldLeft(base): (a, o) =>
+					val base2 =
+						if game.level < Level.Ejections then
+							base
+						else
+							currGame.state.actionList.lift(wc.turn).flatMap(_.collectFirst { case a: ClueAction => a }).fold(base): ca =>
+								ca.list.foldLeft(base): (a, o) =>
+									if o != focus && a.meta(o).trash && a.state.deck(o).clues.forall(_.turn >= wc.turn) then
+										val restoredInf = a.common.thoughts(o).possible.difference(a.state.trashSet)
+										a.withMeta(o)(_.copy(trash = false))
+											.withThought(o)(t => t.copy(inferred = restoredInf, infoLock = restoredInf.toOpt))
+									else
+										a
+					game.state.hands(wc.target).foldLeft(base2): (a, o) =>
 						if a.meta(o).cm && a.meta(o).reasoning.headOption.contains(wc.turn) then
 							a.withMeta(o)(_.copy(status = CardStatus.None))
 						else
 							a
 				case _ => g2
 
-			(g3, newDisambiguated)
+			val g4 = game.waiting.find(w => w.focus == focus && w.discharge) match
+				case Some(_) if !demos.exists(w => w.focus == focus && w.discharge) && !sameFocusWcs.exists(w => w.discharge && (!w.symmetric || w.target == game.state.ourPlayerIndex)) =>
+					val keepTrash = demos.exists(w => w.focus == focus && w.trashFinesse) || sameFocusWcs.exists(w => w.trashFinesse && (!w.symmetric || w.target == game.state.ourPlayerIndex))
+					g3.withXMeta(focus)(_.copy(discharged = None))
+						.withMeta(focus): m =>
+							m.copy(
+								trash = if keepTrash then m.trash else false,
+								status = if m.status == CardStatus.CalledToDiscard then CardStatus.None else m.status
+							)
+						.withThought(focus)(t => t.copy(infoLock = t.inferred.toOpt))
+				case _ => g3
+
+			(g4, newDisambiguated)
+
+		val accGame2 = demos.filter(w => w.discharge && !w.ambiguousSelf)
+			.groupBy(_.focus)
+			.foldLeft(accGame):
+				case (curr, (focusOrder, wcs)) =>
+					val sample = wcs.head
+					if !curr.state.hands(sample.target).contains(focusOrder) then
+						curr
+					else
+						val ids = IdentitySet.from(wcs.map(_.inference))
+						applyDischarge(curr, focusOrder, sample.target, sample.turn, ids, confirmed = true)
 
 		val newWcs = retainWCs.map: w =>
 			if disambiguatedWcs.contains(w) then w.copy(ambiguousSelf = false) else w
 		.toList
 
-		accGame.copy(waiting = newWcs)
+		accGame2.copy(waiting = newWcs)
 	.when(_ => elim):
 		_.elim(except = hypo, skipHypoStacks = hypo.isDefined)
 
@@ -274,7 +313,7 @@ def updateWc(prev: HGroup, game: HGroup, action: Action, wc: WaitingConnection, 
 			game.common.thoughts(conn.order).possible.intersect(conn.ids).isEmpty
 
 	lazy val impossibleFocus = wc.connections.headOption.forall(!_.isInstanceOf[PositionalConn]) &&
-		!(wc.trashFinesse && !state.hands(wc.target).contains(wc.focus)) &&
+		!((wc.trashFinesse || wc.discharge) && !state.hands(wc.target).contains(wc.focus)) &&
 		!game.common.thoughts(wc.focus).possible.contains(wc.inference)
 
 	if !prev.state.hands(reacting).contains(wc.currConn.order) then

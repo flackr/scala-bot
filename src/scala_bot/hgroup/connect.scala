@@ -690,6 +690,33 @@ def connect(ctx: ClueContext, id: Identity, looksDirect: Boolean, thinksStall: F
 			Log.info(s"found connections: ${state.logConns(finalizedConns, id)}${if symmetric then " (symmetric)" else ""}${if preferOwn then " (ambiguous)" else ""}")
 			Some(FocusPossibility(id, finalizedConns, ClueInterp.Play, symmetric, ambiguous = preferOwn))
 
+	val bob = state.nextPlayerIndex(giver)
+	val eligible5CE =
+		game.level >= Level.Ejections &&
+		state.numPlayers >= 3 &&
+		bob != target &&
+		clue.kind == ClueKind.Colour &&
+		id.rank == 5 &&
+		!state.isBasicTrash(id) &&
+		!state.isInverted(id) &&
+		state.playStacks(id.suitIndex) <= 2 &&
+		!prev.state.deck(focus).clued &&
+		!prev.isTouched(focus) &&
+		positional.isEmpty &&
+		!forTrashFinesse &&
+		!immediate &&
+		ignoreKnown.isEmpty
+
+	val baseNormalRes =
+		if !eligible5CE then
+			normalRes
+		else
+			normalRes.filterNot: fp =>
+				fp.connections.count(c => c.reacting == bob && c.isInstanceOf[FinesseConn]) >= 2
+
+	if eligible5CE && !actualAssumeTruth && !preferOwn && baseNormalRes.isEmpty then
+		return connect5ColorEjection(ctx, id, looksDirect, thinksStall, initialConnCtx.ignore, findOwn)
+
 	val canTryDoubleBluff =
 		game.level >= Level.DoubleBluffs &&
 		state.numPlayers >= 3 &&
@@ -700,11 +727,10 @@ def connect(ctx: ClueContext, id: Identity, looksDirect: Boolean, thinksStall: F
 		ignoreKnown.isEmpty
 
 	if !canTryDoubleBluff then
-		normalRes
-	else if normalRes.isEmpty then
+		baseNormalRes
+	else if baseNormalRes.isEmpty then
 		connectDoubleBluff(ctx, id, looksDirect, thinksStall, initialConnCtx.ignore, findOwn)
 	else
-		val bob = state.nextPlayerIndex(giver)
 		val cathy = state.nextPlayerIndex(bob)
 
 		def isUnseen(order: Int) =
@@ -726,13 +752,13 @@ def connect(ctx: ClueContext, id: Identity, looksDirect: Boolean, thinksStall: F
 			findOwn.contains(cathy) &&
 			fp.connections.exists(c => c.reacting == cathy && isUnseen(c.order))
 
-		if normalRes.exists(fp => isPreemptedTriple(fp) || isUnseenMultiSelfOnBob(fp) || isUnseenSelfOnCathy(fp)) then
+		if baseNormalRes.exists(fp => isPreemptedTriple(fp) || isUnseenMultiSelfOnBob(fp) || isUnseenSelfOnCathy(fp)) then
 			val dbRes = connectDoubleBluff(ctx, id, looksDirect, thinksStall, initialConnCtx.ignore, findOwn)
 			if dbRes.isEmpty then
-				normalRes
+				baseNormalRes
 			else
 				val dbOrders = dbRes.head.connections.map(_.order)
-				val (sameOrders, otherNormal) = normalRes.filterNot(isPreemptedTriple).partition(_.connections.map(_.order) == dbOrders)
+				val (sameOrders, otherNormal) = baseNormalRes.filterNot(isPreemptedTriple).partition(_.connections.map(_.order) == dbOrders)
 				val mergedDb = if sameOrders.isEmpty then dbRes else dbRes.map: db =>
 					val mergedConns = db.connections.zipWithIndex.map: (conn, idx) =>
 						conn match
@@ -743,7 +769,108 @@ def connect(ctx: ClueContext, id: Identity, looksDirect: Boolean, thinksStall: F
 					db.copy(connections = mergedConns)
 				mergedDb ++ otherNormal
 		else
-			normalRes
+			baseNormalRes
+
+def connect5ColorEjection(ctx: ClueContext, id: Identity, looksDirect: Boolean, thinksStall: FastBitSet, ignore: FastBitSet, findOwn: Option[Int]): List[FocusPossibility] =
+	val ClueContext(prev, game, action, _) = ctx
+	val ClueAction(giver, target, _, _) = action
+	val state = game.state
+	val FocusResult(focus, _, _) = ctx.focusResult
+
+	val bob = state.nextPlayerIndex(giver)
+
+	def thinksClueIsStall(p: Int) =
+		thinksStall.contains(p) && (
+			giver == state.ourPlayerIndex ||
+			state.ourHand.forall(o => state.deck(o).clued || game.me.orderKt(game, o))
+		)
+
+	def resetFinesse(o: Int) =
+		prev.meta(o).status == CardStatus.Finessed &&
+		!prev.common.thoughts(o).reset &&
+		game.common.thoughts(o).reset
+
+	def knownId(o: Int): Option[Identity] =
+		state.deck(o).id().orElse:
+			Option.when(game.future(o).length == 1)(game.future(o).head)
+
+	if thinksClueIsStall(bob) || bluffInterferes(game, bob) then
+		return Nil
+
+	def advanceHypo(hypo: HGroup, playerIdx: Int, order: Int, playId: Identity): HGroup =
+		val playAction = PlayAction(playerIdx, order, playId.suitIndex, playId.rank)
+		val level = Logger.level
+		Logger.setLevel(LogLevel.Error.min(level))
+		val res = hypo.onPlay(playAction)
+			.pipe(refreshWCs(hypo, _, playAction, hypo = Some(giver)))
+		Logger.setLevel(level)
+		res
+
+	val (_, _, bobBlindPlays) = ((state.playStacks(id.suitIndex) + 1) to 4).foldLeft((game, FastBitSet.single(focus), 0)):
+		case ((hypo, usedOrders, blindCount), r) =>
+			val reqId = Identity(id.suitIndex, r)
+			val stepCtx = ctx.copy(game = hypo)
+
+			val knownOpt = findKnownConn(stepCtx, reqId, id, ignore.union(usedOrders), findOwn = findOwn.isDefined)
+			val bobPromptOpt =
+				if knownOpt.isDefined then None
+				else hypo.common.findPrompt(hypo, bob, reqId, usedOrders, ignore.union(state.hands(bob).filter(!prev.state.deck(_).clued)))
+					.filter(!rainbowMismatch(prev, hypo, action, reqId, _))
+
+			val otherConnOpt =
+				if knownOpt.isDefined || bobPromptOpt.isDefined then None
+				else
+					val connCtx = ConnectContext(looksDirect = looksDirect, thinksStall = thinksStall, connected = usedOrders, ignore = ignore)
+					(1 until state.numPlayers).map(i => (giver - i + state.numPlayers) % state.numPlayers)
+						.filter(_ != bob)
+						.findSome(p => findSingleConn(stepCtx, p, reqId, connCtx, ConnectOpts(assumeTruth = true)))
+
+			knownOpt match
+				case Some(conn) =>
+					val playId = hypo.state.deck(conn.order).id().getOrElse(reqId)
+					(advanceHypo(hypo, conn.reacting, conn.order, playId), usedOrders.incl(conn.order), blindCount)
+				case None =>
+					bobPromptOpt match
+						case Some(pOrder) =>
+							val playId = hypo.state.deck(pOrder).id().filter(hypo.state.isPlayable).getOrElse(reqId)
+							(advanceHypo(hypo, bob, pOrder, playId), usedOrders.incl(pOrder), blindCount)
+						case None =>
+							otherConnOpt match
+								case Some(conns) =>
+									val nextHypo = conns.foldLeft(hypo): (acc, c) =>
+										val playId = acc.state.deck(c.order).id().orElse(Option.when(c.ids.length == 1)(c.ids.head)).getOrElse(reqId)
+										advanceHypo(acc, c.reacting, c.order, playId)
+									(nextHypo, usedOrders.union(conns.map(_.order)), blindCount)
+								case None =>
+									val nextHypo = hypo.withState(_.withPlay(reqId)).elim(skipHypoStacks = true)
+									(nextHypo, usedOrders, blindCount + 1)
+
+	if bobBlindPlays < 2 then
+		return Nil
+
+	game.findNthFinesse(bob, 2, connected = FastBitSet.single(focus), ignore = ignore).filterNot(resetFinesse) match
+		case None => Nil
+		case Some(fp2) =>
+			val bIdsOpt: Option[List[Identity]] = knownId(fp2) match
+				case Some(b) =>
+					Option.when(state.isPlayable(b) && !state.isInverted(b))(List(b))
+				case None if findOwn.contains(bob) =>
+					val playable = game.players(bob).thoughts(fp2).inferred.filter(i => state.isPlayable(i) && !state.isInverted(i))
+					Option.when(playable.nonEmpty):
+						val commonPlayable = game.common.thoughts(fp2).inferred.filter(i => state.isPlayable(i) && !state.isInverted(i))
+						commonPlayable.when(_.isEmpty)(_ => playable).toList
+				case _ => None
+
+			bIdsOpt.toList.map: bIds =>
+				val conns = List(FinesseConn(bob, fp2, bIds, FinesseKind.Bluff))
+				val symmetric = !state.deck(focus).matches(id, assume = target == state.ourPlayerIndex) ||
+					!game.players(target).thoughts(focus).possible.contains(id) ||
+					(!prev.isTouched(focus) && visibleFind(state, prev.players(giver), id, infer = true, excludeOrder = focus).exists(prev.isTouched)) ||
+					symmetricConns(state, conns) ||
+					conns.exists(c => unconfirmedTrashPlay(prev, giver, c.order))
+
+				Log.info(s"found 5 color ejection: ${state.logConns(conns, id)}${if symmetric then " (symmetric)" else ""}")
+				FocusPossibility(id, conns, ClueInterp.Play, symmetric = symmetric)
 
 def connectDoubleBluff(ctx: ClueContext, id: Identity, looksDirect: Boolean, thinksStall: FastBitSet, ignore: FastBitSet, findOwn: Option[Int]): List[FocusPossibility] =
 	val ClueContext(prev, game, action, _) = ctx
@@ -784,6 +911,7 @@ def connectDoubleBluff(ctx: ClueContext, id: Identity, looksDirect: Boolean, thi
 		state.playStacks(id.suitIndex) + 1 >= id.rank ||
 		state.isInverted(id) ||
 		positional.contains(Positional.TrashPush) ||
+		(game.level >= Level.Ejections && clue.kind == ClueKind.Colour && id.rank == 5 && !prev.state.deck(focus).clued && !prev.isTouched(focus)) ||
 		(clue.kind == ClueKind.Colour && (bob == target || cathy == target)) ||
 		(bob == target && looksDirect) ||
 		(cathy == target && isSingleBluffRank) ||
@@ -994,7 +1122,12 @@ def connectTrashFinesses(ctx: ClueContext, looksDirect: Boolean, thinksStall: Fa
 	val ClueAction(giver, target, _, clue) = action
 	val FocusResult(focus, _, positional) = ctx.focusResult
 
-	if game.level < Level.TrashMoves || positional.contains(Positional.TrashPush) || isTrashClue(prev, game, action, focus) then
+	val hasUsefulNewlyCluedNonFocus =
+		game.level >= Level.Ejections &&
+		target != state.ourPlayerIndex &&
+		action.list.exists(o => o != focus && !prev.state.deck(o).clued && state.deck(o).id().exists(!state.isBasicTrash(_)))
+
+	if game.level < Level.TrashMoves || positional.contains(Positional.TrashPush) || isTrashClue(prev, game, action, focus) || hasUsefulNewlyCluedNonFocus then
 		return Nil
 
 	val targetIds = (0 until state.variant.suits.length).toList.flatMap: suitIndex =>
@@ -1046,3 +1179,126 @@ def finalizeConns(conns: List[Connection], givenByUs: Boolean = false) =
 			case x => x
 
 		newHead +: conns.tail
+
+/** Searches for Level 16 Unknown Trash Discharge (UTD) and Unknown Dupe Discharge (UDD) connections on Bob's 3rd finesse position.
+  * @return `(actualDischarge, fps)` where `actualDischarge` is true when `target != state.ourPlayerIndex` and the clue visibly requires a 3FP discharge.
+  */
+def connectDischarge(ctx: ClueContext, rawTrashFocusPoss: Seq[FocusPossibility], thinksStall: FastBitSet, findOwn: Option[Int] = None): (Boolean, List[FocusPossibility]) =
+	val ClueContext(prev, game, action, _) = ctx
+	val (common, state) = (game.common, game.state)
+	val ClueAction(giver, target, list, _) = action
+	val FocusResult(focus, _, positional) = ctx.focusResult
+
+	val bob = state.nextPlayerIndex(giver)
+
+	def thinksClueIsStall(p: Int) =
+		thinksStall.contains(p) && (
+			giver == state.ourPlayerIndex ||
+			state.ourHand.forall(o => state.deck(o).clued || game.me.orderKt(game, o))
+		)
+
+	val baseEligible =
+		game.level >= Level.Ejections &&
+		state.numPlayers >= 3 &&
+		bob != target &&
+		!prev.state.deck(focus).clued &&
+		positional.isEmpty &&
+		!isTrashClue(prev, game, action, focus)
+
+	if !baseEligible then
+		return (false, Nil)
+
+	val focusThought = common.thoughts(focus)
+
+	val hasUsefulNewlyCluedNonFocus =
+		if target != state.ourPlayerIndex then
+			list.exists(o => o != focus && !prev.state.deck(o).clued && state.deck(o).id().exists(!state.isBasicTrash(_)))
+		else
+			list.exists(o => o != focus && !prev.state.deck(o).clued && common.thoughts(o).possible.exists(!state.isBasicTrash(_)))
+
+	val hasUnplayableUsefulInEmpathy =
+		focusThought.possible.exists(i => !state.isBasicTrash(i) && !state.isPlayable(i)) &&
+		!rawTrashFocusPoss.exists(fp => !fp.isBluff && (!fp.symmetric || target == state.ourPlayerIndex))
+
+	val uddAllowed =
+		!game.inEndgame &&
+		thinksStall.isEmpty
+
+	val actualDischarge = target != state.ourPlayerIndex && !thinksClueIsStall(bob) && state.deck(focus).id().exists: focusId =>
+		!state.isInverted(focusId) && (
+			(state.isBasicTrash(focusId) && (hasUsefulNewlyCluedNonFocus || hasUnplayableUsefulInEmpathy)) || (
+				!state.isBasicTrash(focusId) &&
+				uddAllowed &&
+				!(state.isPlayable(focusId) && (prev.state.clueTokens == 8 || prev.dda.isDefined)) &&
+				state.hands(target).exists(o => o != focus && game.isTouched(o) && state.deck(o).matches(focusId))
+			)
+		)
+
+	if (target != state.ourPlayerIndex && !actualDischarge) || thinksClueIsStall(bob) || bluffInterferes(game, bob) then
+		return (actualDischarge, Nil)
+
+	def resetFinesse(o: Int) =
+		prev.meta(o).status == CardStatus.Finessed &&
+		!prev.common.thoughts(o).reset &&
+		game.common.thoughts(o).reset
+
+	def knownId(o: Int): Option[Identity] =
+		state.deck(o).id().orElse:
+			Option.when(game.future(o).length == 1)(game.future(o).head)
+
+	val unconfirmedTrash = state.heldOrders.filter(unconfirmedTrashPlay(prev, giver, _, findOwn))
+
+	game.findNthFinesse(bob, 3, connected = FastBitSet.single(focus), ignore = unconfirmedTrash).filterNot(resetFinesse) match
+		case None => (actualDischarge, Nil)
+		case Some(fp3) =>
+			val bIdsOpt: Option[List[Identity]] = knownId(fp3) match
+				case Some(b) =>
+					Option.when(state.isPlayable(b) && !state.isInverted(b))(List(b))
+				case None if findOwn.contains(bob) =>
+					val playable = game.players(bob).thoughts(fp3).inferred.filter(i => state.isPlayable(i) && !state.isInverted(i))
+					Option.when(playable.nonEmpty):
+						val commonPlayable = common.thoughts(fp3).inferred.filter(i => state.isPlayable(i) && !state.isInverted(i))
+						commonPlayable.when(_.isEmpty)(_ => playable).toList
+				case _ => None
+
+			bIdsOpt match
+				case None => (actualDischarge, Nil)
+				case Some(bIds) =>
+					val utdIds =
+						if hasUsefulNewlyCluedNonFocus || hasUnplayableUsefulInEmpathy then
+							focusThought.possible.filter(i => state.isBasicTrash(i) && !state.isInverted(i))
+						else
+							IdentitySet.empty
+
+					val uddIds =
+						if !uddAllowed then IdentitySet.empty
+						else focusThought.possible.filter: id =>
+							!state.isBasicTrash(id) &&
+							!state.isCritical(id) &&
+							!state.isInverted(id) &&
+							!(state.isPlayable(id) && (prev.state.clueTokens == 8 || prev.dda.isDefined)) &&
+							state.hands(target).exists: o =>
+								o != focus &&
+								game.isTouched(o) &&
+								common.thoughts(o).possible.contains(id)
+							&& {
+								val knownOutsideTarget = (0 until state.numPlayers).summing: p =>
+									if p == target then 0
+									else state.hands(p).count(o => common.thoughts(o).matches(id))
+								state.cardCount(id.toOrd) - state.baseCount(id.toOrd) - knownOutsideTarget >= 2
+							}
+
+					val dischargeIds = utdIds.union(uddIds)
+					val conns = List(FinesseConn(bob, fp3, bIds, FinesseKind.Bluff))
+
+					if dischargeIds.isEmpty then
+						(actualDischarge, Nil)
+					else
+						Log.info(s"found discharge connections: ${state.logConns(conns)} -> [${dischargeIds.fmt(state)}]")
+						val fps = dischargeIds.toList.map: id =>
+							val symmetric = !state.deck(focus).matches(id, assume = target == state.ourPlayerIndex) ||
+								!game.players(target).thoughts(focus).possible.contains(id) ||
+								symmetricConns(state, conns) ||
+								conns.exists(c => unconfirmedTrashPlay(prev, giver, c.order))
+							FocusPossibility(id, conns, ClueInterp.Play, symmetric = symmetric, discharge = true)
+						(actualDischarge, fps)

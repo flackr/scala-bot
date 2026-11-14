@@ -228,23 +228,34 @@ def interpNormalClue(ctx: ClueContext, symmetricInterp: SymmetricInterp, thinksS
 		.flatMap:
 			connect(ctx, _, initialLooksDirect, thinksStall)
 
-	val hasNormalBluff = normalFocusPoss.exists(fp => fp.isBluff && fp.connections.count(_.isInstanceOf[FinesseConn]) == 1)
 	val rawTrashFocusPoss = connectTrashFinesses(ctx, initialLooksDirect, thinksStall).filterNot: fp =>
-		hasNormalBluff && fp.connections.headOption.exists(c => c.isInstanceOf[FinesseConn] && c.reacting == state.nextPlayerIndex(giver))
+		fp.connections.headOption.exists: c =>
+			c.isInstanceOf[FinesseConn] &&
+			c.reacting == state.nextPlayerIndex(giver) &&
+			normalFocusPoss.exists: nfp =>
+				nfp.isBluff &&
+				nfp.connections.count(_.isInstanceOf[FinesseConn]) == 1 &&
+				nfp.connections.headOption.exists(_.order == c.order)
 
-	val considerTrash = rawTrashFocusPoss.nonEmpty && (
+	val (actualDischarge, dischargeFocusPoss) = connectDischarge(ctx, rawTrashFocusPoss, thinksStall)
+
+	val considerTrash = !actualDischarge && rawTrashFocusPoss.nonEmpty && (
 		target == state.ourPlayerIndex ||
 		!normalFocusPoss.exists(fp => !fp.symmetric && state.deck(focus).matches(fp.id))
 	)
 
+	val effectiveSavePoss = if actualDischarge then Nil else savePoss
+
 	val focusPoss =
-		if considerTrash then
-			normalFocusPoss.filterNot(fp => rawTrashFocusPoss.exists(_.id == fp.id)) ++ rawTrashFocusPoss
+		if actualDischarge then
+			dischargeFocusPoss
+		else if considerTrash then
+			normalFocusPoss.filterNot(fp => rawTrashFocusPoss.exists(_.id == fp.id)) ++ rawTrashFocusPoss ++ dischargeFocusPoss
 		else
-			normalFocusPoss
+			normalFocusPoss ++ dischargeFocusPoss
 
 	val simplest =
-		val possible = (savePoss ++ focusPoss)
+		val possible = (effectiveSavePoss ++ focusPoss)
 			.filter: fp =>
 				game.players(target).thoughts(focus).possible.contains(fp.id) ||
 				game.players(giver).thoughts(focus).possible.contains(fp.id)
@@ -275,7 +286,7 @@ def interpNormalClue(ctx: ClueContext, symmetricInterp: SymmetricInterp, thinksS
 				simplest.nonEmpty && {
 					clue.kind == ClueKind.Colour ||
 					positional.isDefined ||
-					savePoss.nonEmpty ||
+					effectiveSavePoss.nonEmpty ||
 					// Looks like an existing possibility
 					focusPoss.exists: fp =>
 						game.players(target).thoughts(focus).possible.contains(fp.id) &&
@@ -284,15 +295,19 @@ def interpNormalClue(ctx: ClueContext, symmetricInterp: SymmetricInterp, thinksS
 							!game.isBlindPlaying(c.order)		// A blind-playing card is still unknown
 				}
 
-			val normalOwnFps =
-				common.thoughts(focus).inferred.filter: inf =>
-					!game.invalidFocus(giver, clue, inf, ctx.focusResult) &&
-					!(savePoss.exists(_.id == inf) || simplest.exists(_.id == inf))
-				.flatMap:
-					connect(ctx, _, looksDirect, thinksStall, findOwn = Some(state.ourPlayerIndex))
+			val ownFps =
+				if actualDischarge then
+					connectDischarge(ctx, rawTrashFocusPoss, thinksStall, findOwn = Some(state.ourPlayerIndex))._2
+				else
+					val normalOwnFps =
+						common.thoughts(focus).inferred.filter: inf =>
+							!game.invalidFocus(giver, clue, inf, ctx.focusResult) &&
+							!(effectiveSavePoss.exists(_.id == inf) || simplest.exists(fp => !fp.discharge && fp.id == inf))
+						.flatMap:
+							connect(ctx, _, looksDirect, thinksStall, findOwn = Some(state.ourPlayerIndex))
 
-			val trashOwnFps = connectTrashFinesses(ctx, looksDirect, thinksStall, findOwn = Some(state.ourPlayerIndex))
-			val ownFps = normalOwnFps ++ trashOwnFps
+					val trashOwnFps = connectTrashFinesses(ctx, looksDirect, thinksStall, findOwn = Some(state.ourPlayerIndex))
+					normalOwnFps ++ trashOwnFps
 
 			val filtered = filterFps(ctx, simplest ++ ownFps)
 			val simplestOwn = occamsRazor(ctx, filtered, state.ourPlayerIndex, actualId = game.me.thoughts(focus).id())
@@ -305,7 +320,7 @@ def interpNormalClue(ctx: ClueContext, symmetricInterp: SymmetricInterp, thinksS
 					game.withThought(focus)(t => t.copy(inferred = IdentitySet.empty))
 						.withMeta(focus)(_.copy(trash = true))
 						.withMove(ClueInterp.Fix)
-				else if game.level >= Level.Context && chop && list.size > 1 then
+				else if !actualDischarge && game.level >= Level.Context && chop && list.size > 1 then
 					val newFocus = list.max
 					val newCtx = ctx.withFocus(newFocus)
 

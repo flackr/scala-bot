@@ -68,9 +68,17 @@ private def clueFilter(game: HGroup, giver: Int) =
 		val list = state.clueTouched(state.hands(target), clue)
 		val focus = game.determineFocus(game, ClueAction(giver, target, list, clue.base)).focus
 
-		// Don't clue known duplicates
+		// Don't clue known duplicates (unless valid Level 16 Unknown Dupe Discharge)
 		state.deck(focus).id().forall: id =>
-			visibleFind(state, game.common, id, infer = true, excludeOrder = focus).isEmpty
+			val existing = visibleFind(state, game.common, id, infer = true, excludeOrder = focus)
+			existing.isEmpty || (
+				game.level >= Level.Ejections &&
+				!game.inEndgame &&
+				state.numPlayers >= 3 &&
+				state.nextPlayerIndex(giver) != target &&
+				existing.forall(state.hands(target).contains) &&
+				game.findNthFinesse(state.nextPlayerIndex(giver), 3).exists(state.deck(_).id().exists(state.isPlayable))
+			)
 
 def _forceClue(orig: HGroup, game: HGroup, offset: Int, only: Option[Int] = None): (Double, Boolean) =
 	val state = game.state
@@ -115,8 +123,10 @@ def advance(orig: HGroup, game: HGroup, offset: Int): Double =
 	val bob = state.nextPlayerIndex(playerIndex)
 
 	lazy val trash = player.thinksTrash(game, playerIndex).sortBy: o =>
-		// Discard leftmost clued trash (largest order), then rightmost unclued trash (smallest order)
-		if state.deck(o).clued then -o else o
+		// Discharged focus first, then leftmost clued trash (largest order), then rightmost unclued trash (smallest order)
+		if game.xmeta(o).discharged.isDefined then (-2, -o)
+		else if state.deck(o).clued then (-1, -o)
+		else (0, o)
 	val allPlayables = player.thinksPlayables(game, playerIndex).filter(o => !player.orderKt(game, o))
 
 	lazy val earlyGameClue = game.earlyGameClue(playerIndex)
@@ -495,7 +505,8 @@ def evalGame(orig: HGroup, game: HGroup, offset: Int): Double =
 
 		lazy val duplicated = state.heldOrders.exists: o =>
 			state.deck(o).matches(id) ||
-			game.me.thoughts(o).matches(id, infer = true) && game.meta(o).focused
+			(game.me.thoughts(o).matches(id, infer = true) && (game.meta(o).focused || game.isTouched(o)))
+		|| game.common.links.exists(_.promise.contains(id))
 
 		lazy val potentialOwn = !dupeResponsibility(orig, id, orig.state.holderOf(discarded.head)).contains(state.ourPlayerIndex)
 
@@ -557,7 +568,7 @@ def evalGame(orig: HGroup, game: HGroup, offset: Int): Double =
 	val playablesDiscarded = -1 * game.state.playableSet.count: id =>
 		game.state.discardStacks(id.suitIndex)(id.rank - 1).length > orig.state.discardStacks(id.suitIndex)(id.rank - 1).length &&
 		visibleFind(game.state, game.me, id, infer = true).forall(!game.isTouched(_)) &&
-		!orig.common.links.exists:
+		!(orig.common.links ++ game.common.links).exists:
 			case Link.Unpromised(orders, ids) =>
 				ids.contains(id) && orders.exists(game.me.thoughts(_).matches(id, assume = true))
 			case l => l.promise.contains(id)

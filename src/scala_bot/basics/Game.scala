@@ -132,6 +132,15 @@ trait Game:
 	/** Whether the convention considers rank-clued cards to be !inverted when determining playability. */
 	def assumeNotInverted: Boolean = false
 
+	/** Whether the convention considers the order to be discardable trash (e.g. a 2-card UDD partner). */
+	def isConvTrash(@annotation.unused player: Player, @annotation.unused order: Int): Boolean = false
+
+	/** An extra ordering function on [[Player.thinksTrash]] (e.g. discharged focus before other trash). */
+	def orderTrashCards(@annotation.unused player: Player, @annotation.unused playerIndex: Int, orders: Vector[Int]): Vector[Int] = orders
+
+	/** Whether a pending waiting connection may resolve this focused order as trash / called-to-discard. */
+	def hasPendingTrashWc(@annotation.unused order: Int): Boolean = false
+
 trait GameOps[G <: Game]:
 	/** Returns a copy of the game state, but restarted from the beginning.
 	  * @param game     The current game state.

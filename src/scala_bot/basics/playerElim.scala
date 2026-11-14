@@ -358,6 +358,7 @@ extension (p: Player)
 			val thought = p.thoughts(order)
 
 			!game.meta(order).trash &&
+			!game.hasPendingTrashWc(order) &&
 			// !thought.reset &&
 			game.meta(order).status != CardStatus.CalledToDiscard &&
 			!thought.id(symmetric = true).isDefined &&

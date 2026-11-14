@@ -137,6 +137,8 @@ case class Player(
 
 		candidates.exists: o =>
 			o != excludeOrder &&
+			game.meta(o).status != CardStatus.CalledToDiscard &&
+			!game.meta(o).trash &&
 			thoughts(o).matches(id, infer = true) &&
 			game.state.deck(o).matches(id, assume = true) &&		// card must actually match
 			game.me.thoughts(o).possible.contains(id) &&
@@ -166,6 +168,7 @@ case class Player(
 				thought.infoLock.existsO(_.forall(isTrash(game, _, order))) ||
 				meta.trash ||
 				meta.status == CardStatus.CalledToDiscard ||
+				game.isConvTrash(this, order) ||
 				(game.loadedOnPtd && meta.status == CardStatus.PermissionToDiscard)
 
 			conventionalTrash || thought.possibilities.forall(isTrash(game, _, order))
@@ -180,7 +183,8 @@ case class Player(
 			game.state.hands(game.state.holderOf(order)).exists: o =>
 				o != order &&
 				thoughts(o).matches(id) &&
-				(!game.meta(order).focused || game.meta(o).focused)
+				game.meta(o).status != CardStatus.CalledToDiscard &&
+				(!game.meta(order).focused || game.meta(o).focused || game.meta(order).status == CardStatus.CalledToDiscard)
 		// (thought.inferred.isEmpty && thought.reset)
 
 	/** Returns true if this order is known playable or conventionally promised playable.
@@ -295,7 +299,7 @@ case class Player(
 
 	/** Returns the trash orders in the given player's hand. (See [[Player.orderTrash]].) */
 	def thinksTrash(game: Game, playerIndex: Int) =
-		game.state.hands(playerIndex).filter(orderTrash(game, _))
+		game.orderTrashCards(this, playerIndex, game.state.hands(playerIndex).filter(orderTrash(game, _)))
 
 	/** Returns the orders that could be discarded from the player's hand (may not be trash).*/
 	def discardable(game: Game, playerIndex: Int, allowLockedSacrifice: Boolean = false) =

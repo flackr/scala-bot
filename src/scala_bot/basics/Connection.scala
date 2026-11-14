@@ -133,7 +133,9 @@ case class FocusPossibility(
 	/** Whether this is a Trash Finesse or Trash Bluff. */
 	trashFinesse: Boolean = false,
 	/** Whether the target needs to see the blind play to know their card is trash. */
-	needsBlindPlay: Boolean = false
+	needsBlindPlay: Boolean = false,
+	/** Whether this is an Unknown Trash Discharge or Unknown Dupe Discharge. */
+	discharge: Boolean = false
 ):
 	/** Returns true if the first connection is a bluff. */
 	def isBluff =
@@ -171,7 +173,11 @@ case class WaitingConnection(
 	/** Whether this is a Trash Finesse or Trash Bluff. */
 	trashFinesse: Boolean = false,
 	/** Whether the target needs to see the blind play to know their card is trash. */
-	needsBlindPlay: Boolean = false
+	needsBlindPlay: Boolean = false,
+	/** Whether this is an Unknown Trash Discharge or Unknown Dupe Discharge. */
+	discharge: Boolean = false,
+	/** Whether removing this waiting connection should also remove its inference from the focus. */
+	removeInf: Boolean = true
 ):
 	/** Returns the index of the next connection that still exists. */
 	def getNextIndex(state: State) =
