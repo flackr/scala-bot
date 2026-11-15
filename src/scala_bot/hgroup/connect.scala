@@ -789,8 +789,8 @@ def connectDoubleBluff(ctx: ClueContext, id: Identity, looksDirect: Boolean, thi
 		(cathy == receiver && isSingleBluffRank) ||
 		thinksClueIsStall(bob) ||
 		thinksClueIsStall(cathy) ||
-		bluffInterferes(game, bob) ||
-		bluffInterferes(game, cathy)
+		bluffInterferes(game, giver, bob) ||
+		bluffInterferes(game, giver, cathy)
 
 	if disallowed then
 		return Nil

@@ -27,10 +27,12 @@ def bluffDisconnect(game: HGroup, clue: BaseClue, blind: Identity, focus: Int): 
 def doubleBluffDisconnect(game: HGroup, clue: BaseClue, blind2: Identity, focus: Int): Boolean =
 	game.state.isPlayable(blind2) || bluffDisconnect(game, clue, blind2, focus)
 
-def bluffInterferes(game: HGroup, reacting: Int): Boolean =
-	game.state.hands(reacting).exists: o =>
+def bluffInterferes(game: HGroup, giver: Int, reacting: Int): Boolean =
+	val state = game.state
+	state.hands(reacting).exists: o =>
 		// game.players(reacting).thoughts(o).possible.contains(truth) &&	// any f/gd should block a bluff
-		(game.isBlindPlaying(o) || game.meta(o).status == CardStatus.GentlemansDiscard)
+		((game.isBlindPlaying(o) && !(giver != state.ourPlayerIndex && game.xmeta(o).fStatus.contains(FStatus.PossiblyOn(state.ourPlayerIndex)))) ||
+			game.meta(o).status == CardStatus.GentlemansDiscard)
 
 def validBluff(game: HGroup, action: ClueAction, blind: Identity, reacting: Int, connected: FastBitSet, symmetric: Boolean = false) =
 	val state = game.state
@@ -44,7 +46,7 @@ def validBluff(game: HGroup, action: ClueAction, blind: Identity, reacting: Int,
 	connected.size == 1 &&
 	disconnect &&
 	!(clue.kind == ClueKind.Colour && reacting == receiver) &&	// not self-colour bluff
-	!bluffInterferes(game, reacting)
+	!bluffInterferes(game, giver, reacting)
 
 /** Returns whether the colour clue could be a save on the given identity. */
 def colourSave(prev: HGroup, action: ClueAction, id: Identity, focus: Int): Boolean =
