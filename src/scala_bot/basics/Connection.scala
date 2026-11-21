@@ -119,7 +119,7 @@ case class PositionalConn(
   * @define ambiguousDesc Whether this involves us when we see another possibility not involving us.
   */
 case class FocusPossibility(
-	id: Identity,
+	ids: IdentitySet,
 	connections: List[Connection],
 	interp: Interp,
 	/** $symmetricDesc */
@@ -147,7 +147,7 @@ case class FocusPossibility(
   * @param receiver      The index of the player who received the clue.
   * @param turn          The turn the clue was given.
   * @param focus         The order of the card focused.
-  * @param inference     The identity of the focused card if true.
+  * @param inferences    The identities of the focused card if true.
   * @param ambiguousPassback Whether this involved an *Ambiguous Passback*.
   * @param selfPassback  Whether this involved a *Self-Passback* (where the receiver has a self-connection but hesitated for someone else).
   * @param symmetric     $symmetricDesc
@@ -160,8 +160,8 @@ case class WaitingConnection(
 	turn: Int,
 	/** The order of the card focused. */
 	focus: Int,
-	/** The identity of the focused card if true. */
-	inference: Identity,
+	/** The identities of the focused card if true. */
+	inferences: IdentitySet,
 	/** Whether this involved an *Ambiguous Passback*. */
 	ambiguousPassback: Boolean = false,
 	/** Whether this involved a *Self-Passback* (where the receiver has a self-connection but hesitated for someone else). */
@@ -176,8 +176,8 @@ case class WaitingConnection(
 	needsBlindPlay: Boolean = false,
 	/** Whether this is an Unknown Trash Discharge or Unknown Dupe Discharge. */
 	discharge: Boolean = false,
-	/** Whether removing this waiting connection should also remove its inference from the focus. */
-	removeInf: Boolean = true
+	/** Identities on the focus that remain valid even if this waiting connection is removed (e.g. direct/save overlap on a discharge). */
+	keepInfs: IdentitySet = IdentitySet.empty
 ):
 	/** Returns the index of the next connection that still exists. */
 	def getNextIndex(state: State) =

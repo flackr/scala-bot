@@ -339,6 +339,7 @@ class UnknownTrashDischarge extends munit.FunSuite:
 		.pipe(takeTurn("Alice clues red to Cathy"))
 		.tap: g =>
 			assertEquals(g.lastMove, Some(ClueInterp.Play))
+			assertEquals(g.waiting.length, 1)
 			hasStatus(g, Bob, 3, CardStatus.Bluffed)
 			hasStatus(g, Cathy, 1, CardStatus.CalledToDiscard)
 			assert(g.common.orderTrash(g, g.state.hands(Cathy.ordinal)(0)))
@@ -433,6 +434,7 @@ class UnknownDupeDischarge extends munit.FunSuite:
 		.pipe(takeTurn("Alice clues red to Cathy"))
 		.tap: g =>
 			assertEquals(g.lastMove, Some(ClueInterp.Play))
+			assertEquals(g.waiting.length, 1)
 			hasStatus(g, Bob, 3, CardStatus.Bluffed)
 			hasStatus(g, Cathy, 1, CardStatus.CalledToDiscard)
 		.pipe(takeTurn("Bob plays b1", "p2"))
@@ -485,6 +487,7 @@ class UnknownDupeDischarge extends munit.FunSuite:
 		.pipe(takeTurn("Alice clues 2 to Cathy"))
 		.tap: g =>
 			assertEquals(g.lastMove, Some(ClueInterp.Play))
+			assertEquals(g.waiting.length, 1)
 			hasStatus(g, Bob, 3, CardStatus.Bluffed)
 			hasStatus(g, Cathy, 1, CardStatus.CalledToDiscard)
 		.pipe(takeTurn("Bob plays b1", "p2"))
@@ -502,6 +505,7 @@ class UnknownDupeDischarge extends munit.FunSuite:
 		.pipe(takeTurn("Alice clues red to Cathy"))
 		.tap: g =>
 			assertEquals(g.lastMove, Some(ClueInterp.Play))
+			assertEquals(g.waiting.length, 1)
 			hasStatus(g, Bob, 3, CardStatus.Bluffed)
 			hasStatus(g, Cathy, 1, CardStatus.CalledToDiscard)
 		.pipe(takeTurn("Bob plays b1", "p2"))
