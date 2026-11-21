@@ -289,6 +289,23 @@ class TrashPush extends munit.FunSuite:
 		// Alice should play the connecting card.
 		assertEquals(game.takeAction.unsafeRunSync(), PerformAction.Play(game.state.hands(Alice.ordinal)(3)))
 
+	test("skips hidden layers to find a non-deferred trash push connection"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx"),
+			Vector("r1", "g1", "p1", "y4"),
+			Vector("y2", "y4", "b4", "r1"),
+			Vector("b2", "y2", "b4", "g1")
+		),
+			playStacks = Some(Vector(5, 1, 5, 1, 5)),
+			starting = Bob
+		)
+		.pipe(takeTurn("Bob clues 1 to Alice (slot 4)"))
+
+		// Donald's y2 is behind a hidden b2 layer (too slow), so Cathy's slot 1 y2 connects for y3 instead.
+		hasStatus(game, Cathy, 1, CardStatus.Finessed)
+		hasStatus(game, Alice, 3, CardStatus.Finessed)
+		hasInfs(game, None, Alice, 3, Vector("y3", "b2", "b3"))
+
 class TrashFinesse extends munit.FunSuite:
 	override def beforeAll() = Logger.setLevel(LogLevel.Off)
 
@@ -302,8 +319,26 @@ class TrashFinesse extends munit.FunSuite:
 		)
 		.pipe(takeTurn("Alice clues 1 to Cathy"))
 
-		// Bob's slot 1 should be blind played.
-		assert(game.isBlindPlaying(game.state.hands(Bob.ordinal)(0)))
+		// Bob's slot 1 should be finessed with a single waiting connection for [y1, g1].
+		hasStatus(game, Bob, 1, CardStatus.Finessed)
+		assertEquals(game.waiting.length, 1)
+		// Cathy's slots 4 and 5 should be chop moved.
+		hasStatus(game, Cathy, 4, CardStatus.ChopMoved)
+		hasStatus(game, Cathy, 5, CardStatus.ChopMoved)
+
+	test("will interpret a rank trash bluff"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx", "xx"),
+			Vector("y2", "p3", "b4", "g4", "g1"),
+			Vector("y5", "g2", "g1", "p2", "b3")
+		),
+			playStacks = Some(Vector(0, 1, 2, 0, 0))
+		)
+		.pipe(takeTurn("Alice clues 1 to Cathy"))
+
+		// Bob's slot 1 should be bluffed with a single waiting connection for [y1, g1].
+		hasStatus(game, Bob, 1, CardStatus.Bluffed)
+		assertEquals(game.waiting.length, 1)
 		// Cathy's slots 4 and 5 should be chop moved.
 		hasStatus(game, Cathy, 4, CardStatus.ChopMoved)
 		hasStatus(game, Cathy, 5, CardStatus.ChopMoved)
@@ -680,10 +715,11 @@ class TrashFinesse extends munit.FunSuite:
 		)
 		.pipe(takeTurn("Cathy clues 1 to Bob"))
 		.tap: g =>
-			// Alice's slot 1 should be blind playing.
+			// Alice's slot 1 should be blind playing with a single waiting connection.
 			hasInfs(g, None, Alice, 1, Vector("r1", "y2", "g2", "b2", "p2"))
 			hasInfs(g, None, Bob, 4, Vector("r1", "y1", "g1", "b1", "p1"))
 			assert(g.isBlindPlaying(g.state.hands(Alice.ordinal)(0)))
+			assertEquals(g.waiting.count(_.trashFinesse), 1)
 
 			// Bob's slot 5 is chop moved.
 			hasStatus(g, Bob, 5, CardStatus.ChopMoved)
@@ -788,6 +824,7 @@ class TrashFinesse extends munit.FunSuite:
 
 		// Since Donald already has a blind play, this cannot be a trash bluff and Alice must play [y4,p4] as a trash finesse.
 		hasInfs(game, None, Alice, 1, Vector("y4", "p4"))
+		assertEquals(game.waiting.count(_.trashFinesse), 1)
 		hasStatus(game, Bob, 3, CardStatus.ChopMoved)
 		hasStatus(game, Bob, 4, CardStatus.ChopMoved)
 
@@ -1087,3 +1124,40 @@ class TrashFinesse extends munit.FunSuite:
 
 		hasStatus(game, Donald, 1, CardStatus.None)
 		hasInfs(game, None, Cathy, 1, Vector("r1", "r2"))
+
+	test("does not search for trash finesses on a 5 save without trash possibilities"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx", "xx"),
+			Vector("y1", "g2", "b3", "p3", "y4"),
+			Vector("r5", "p3", "b4", "g4", "b3")
+		),
+			starting = Bob,
+			playStacks = Some(Vector(4, 0, 5, 0, 0))
+		)
+		.pipe(takeTurn("Bob clues 5 to Alice (slot 5)"))
+
+		hasStatus(game, Cathy, 1, CardStatus.None)
+		hasInfs(game, None, Alice, 5, Vector("r5", "y5", "b5", "p5"))
+
+	test("considers a trash finesse on a chop 5 clue when a trash 5 is possible"):
+		val base = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx", "xx"),
+			Vector("y1", "g2", "b3", "p3", "y4"),
+			Vector("r5", "p3", "b4", "g4", "b3")
+		),
+			starting = Bob,
+			playStacks = Some(Vector(4, 0, 0, 0, 0)),
+			discarded = Vector("g3", "g3")
+		)
+		.pipe(takeTurn("Bob clues 5 to Alice (slot 5)"))
+
+		hasStatus(base, Cathy, 1, CardStatus.Finessed)
+
+		// If Cathy blind-plays r5, Alice learns her 5 is dead trash g5.
+		val played = takeTurn("Cathy plays r5", "r1")(base)
+		hasInfs(played, None, Alice, 5, Vector("g5"))
+
+		// If Cathy discards instead, Alice treats slot 5 as a saved/playable 5.
+		val discarded = takeTurn("Cathy discards b3", "r1")(base)
+		hasInfs(discarded, None, Alice, 5, Vector("r5", "y5", "b5", "p5"))
+		assert(!discarded.meta(discarded.state.hands(Alice.ordinal)(4)).trash)

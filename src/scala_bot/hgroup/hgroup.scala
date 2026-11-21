@@ -45,6 +45,8 @@ enum FStatus:
 	case PossiblyAmbiguous(to: Int)
 	/** The card may or may not be playing, according to the player. */
 	case PossiblyOn(to: Int)
+	/** The card must blind play to prove an unconfirmed *Trash Finesse* to the player. */
+	case ProvingTrashTo(to: Int)
 
 case class XConvData(
 	/** This card may be a different identity than expected (e.g. if it ended up being *Layered*). */
@@ -193,6 +195,10 @@ case class HGroup(
 		xmeta(order).fStatus.forall: f =>
 			f != FStatus.PossiblyAmbiguous(state.ourPlayerIndex) &&
 			f != FStatus.PossiblyOn(state.ourPlayerIndex)
+
+	def provingTrash(order: Int, giver: Int, observer: Option[Int] = None) =
+		xmeta(order).fStatus.existsM:
+			case FStatus.ProvingTrashTo(to) => to != giver && !observer.contains(to)
 
 	def chop(playerIndex: Int) =
 		state.hands(playerIndex).findLast: o =>
@@ -394,10 +400,9 @@ case class HGroup(
 
 		if chop.exists(orders.contains) then
 			if this.level >= Level.TrashMoves && isTrashClue(prev, this, action, chop.get) then
-				val tpFocus = hand.take(hand.indexOf(chop.get)).findLast: o =>
-					!orders.contains(o) &&
-					!prev.state.deck(o).clued &&
-					(prev.meta(o).status == CardStatus.None || prev.meta(o).status == CardStatus.PermissionToDiscard)
+				val cluedGame = orders.foldLeft(prev): (a, o) =>
+					a.withCard(o)(_.copy(clued = true))
+				val tpFocus = cluedGame.chop(receiver)
 
 				return tpFocus.fold(FocusResult(chop.get, chop = true)): focus =>
 					Log.highlight(Console.CYAN, s"trash push on ${state.logId(focus)} $focus")
@@ -674,7 +679,7 @@ case class HGroup(
 					order == wc.currConn.order ||
 					(id.exists(wc.currConn.ids.length == 1 && wc.currConn.ids.head.matches(_)))
 			&&
-			!this.waiting.exists(w => w.connections.forall(wc.connections.contains) && w.inference == wc.inference && w.turn == wc.turn)
+			!this.waiting.exists(w => w.connections.forall(wc.connections.contains) && w.inferences == wc.inferences && w.turn == wc.turn)
 
 	def importantAction(playerIndex: Int) =
 		importantFinesse(playerIndex) || savedCtx(playerIndex).fold(false)(urgentSave)
@@ -780,7 +785,7 @@ object HGroup:
 
 				lostWc match
 					case Some(wc) =>
-						Log.warn(s"removed wc ${game.state.logConns(wc.connections, wc.inference)}! mistake")
+						Log.warn(s"removed wc ${game.state.logConns(wc.connections, wc.inferences)}! mistake")
 						pre.withMove(ClueInterp.Mistake)
 					case None =>
 						val interpreted = interpClue(ClueContext(prev, pre, action))
@@ -884,7 +889,7 @@ object HGroup:
 
 				lostWc match
 					case Some(wc) =>
-						Log.warn(s"removed wc ${game.state.logConns(wc.connections, wc.inference)}! mistake")
+						Log.warn(s"removed wc ${game.state.logConns(wc.connections, wc.inferences)}! mistake")
 						pre.withMove(PlayInterp.Mistake)
 					case None =>
 						pre.resetImportant(playerIndex).pipe: g =>
@@ -1094,10 +1099,10 @@ object HGroup:
 		override def cleanHypo(game: HGroup) =
 			game.waiting.foldLeft(game): (acc, wc) =>
 				if !wc.symmetric then acc else
-					revert(acc, wc.focus, List(wc.inference)).pipe: g =>
+					revert(acc, wc.focus, wc.inferences.toList).pipe: g =>
 						g.copy(
 							players = g.players.map:
-								_.withThought(wc.focus)(t => t.copy(inferred = t.inferred.difference(wc.inference)))
+								_.withThought(wc.focus)(t => t.copy(inferred = t.inferred.difference(wc.inferences)))
 						)
 
 		override def refreshAfterPlay(prev: HGroup, game: HGroup, action: PlayAction) =
