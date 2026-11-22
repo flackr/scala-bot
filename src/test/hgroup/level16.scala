@@ -298,22 +298,23 @@ class UnknownTrashDischarge extends munit.FunSuite:
 		assertEquals(game.takeAction.unsafeRunSync(), PerformAction.Discard(game.state.hands(Alice.ordinal)(1)))
 
 	test("uses 1FP trash bluff instead of 3FP UTD when all useful possibilities are playable"):
-		// r4 on stack: only useful red card is r5, which is immediately playable -> Level 14 1FP Trash Bluff applies.
-		val r4Stack = setup(HGroup.atLevel(16), Vector(
+		// r3 on stack with r5 known in Bob's hand: only useful red card is r4 (2 copies left), which is immediately playable -> Level 14 1FP Trash Bluff applies.
+		val r3Stack = setup(HGroup.atLevel(16), Vector(
 			Vector("xx", "xx", "xx", "xx", "xx"),
-			Vector("b1", "g3", "p4", "y4", "b4"),
+			Vector("b1", "g3", "p4", "y4", "r5"),
 			Vector("g4", "r2", "y3", "p3", "b3")
 		),
-			playStacks = Some(Vector(4, 0, 0, 0, 0))
+			playStacks = Some(Vector(3, 0, 0, 0, 0)),
+			init = fullyKnown[HGroup](Bob, 5, "r5")
 		)
 		.pipe(takeTurn("Alice clues red to Cathy"))
 
-		assertEquals(r4Stack.lastMove, Some(ClueInterp.Play))
-		hasStatus(r4Stack, Bob, 1, CardStatus.Bluffed)
-		hasStatus(r4Stack, Bob, 3, CardStatus.None)
-		hasStatus(r4Stack, Cathy, 3, CardStatus.ChopMoved)
-		hasStatus(r4Stack, Cathy, 4, CardStatus.ChopMoved)
-		hasStatus(r4Stack, Cathy, 5, CardStatus.ChopMoved)
+		assertEquals(r3Stack.lastMove, Some(ClueInterp.Play))
+		hasStatus(r3Stack, Bob, 1, CardStatus.Bluffed)
+		hasStatus(r3Stack, Bob, 3, CardStatus.None)
+		hasStatus(r3Stack, Cathy, 3, CardStatus.ChopMoved)
+		hasStatus(r3Stack, Cathy, 4, CardStatus.ChopMoved)
+		hasStatus(r3Stack, Cathy, 5, CardStatus.ChopMoved)
 
 		// Single-card rank 1 clue: all useful 1s are playable -> 1FP Trash Bluff, so unplayable 1FP is a Mistake even if 3FP is playable!
 		val bad1TrashBluff = setup(HGroup.atLevel(16), Vector(

@@ -1118,10 +1118,13 @@ def connectTrashFinesses(ctx: ClueContext, looksDirect: Boolean, thinksStall: Fa
 		receiver != state.ourPlayerIndex &&
 		action.orders.exists(o => o != focus && !prev.state.deck(o).clued && state.deck(o).id().exists(!state.isBasicTrash(_)))
 
+	val usefulIds = trashClueUsefulIds(prev, game, action, focus)
+
 	if game.level < Level.TrashMoves ||
 		positional.contains(Positional.TrashPush) ||
 		isTrashClue(prev, game, action, focus) ||
 		hasUsefulNewlyCluedNonFocus ||
+		(usefulIds.length == 1 && state.isCritical(usefulIds.head)) ||
 		(savePoss.nonEmpty && !common.thoughts(focus).possible.exists(state.isBasicTrash))
 	then
 		return Nil
