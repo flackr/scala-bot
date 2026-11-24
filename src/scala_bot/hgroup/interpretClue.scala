@@ -252,6 +252,7 @@ def interpNormalClue(ctx: ClueContext, symmetricInterp: SymmetricInterp, thinksS
 
 	val considerTrash = !actualDischarge && rawTrashFocusPoss.nonEmpty && (
 		receiver == state.ourPlayerIndex ||
+		rawTrashFocusPoss.exists(fp => !fp.symmetric && !fp.needsBlindPlay) ||
 		!normalFocusPoss.exists(fp => !fp.symmetric && state.deck(focus).id().exists(fp.ids.contains))
 	)
 
