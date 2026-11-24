@@ -306,6 +306,60 @@ class TrashPush extends munit.FunSuite:
 		hasStatus(game, Alice, 3, CardStatus.Finessed)
 		hasInfs(game, None, Alice, 3, Vector("y3", "b2", "b3"))
 
+	test("trash push does not mark clued cards trash"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx", "xx"),
+			Vector("r1", "y3", "g2", "b2", "p2")
+		),
+			playStacks = Some(Vector(0, 2, 2, 2, 2))
+		)
+		.pipe(takeTurn("Alice clues red to Bob"))
+		.pipe(takeTurn("Bob plays r1", "r2"))
+		.pipe(takeTurn("Alice clues 2 to Bob"))
+
+		// Bob knows the focus (slot 5) is trash, so this is a trash push
+		hasStatus(game, Bob, 2, CardStatus.Finessed)
+		hasInfs(game, None, Bob, 2, Vector("y3", "g3", "b3", "p3"))
+
+		// A trash push does not promise that the clued cards are trash.
+		// Bob knows that the new 2 by good touch should be r2.
+		hasInfs(game, None, Bob, 1, Vector("r2"))
+
+	// From robot2's perspective on https://hanab.live/shared-replay/2076138#42
+	test("trash push does not clobber a finesse"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx"),
+			Vector("m1", "r4", "p5", "g5"),
+			Vector("p1", "b4", "b3", "g4"),
+			Vector("r5", "y4", "p3", "m5")
+		),
+			starting = Bob,
+			playStacks = Some(Vector(2, 2, 3, 5, 1, 4)),
+			discarded = Vector("y1", "g1", "g2", "g4", "p3", "p4", "p1", "p2"),
+			clueTokens = 1,
+			variant = TestVariant.Rainbow6,
+			init =
+				preClue[HGroup](Bob, 3, Seq("5")) andThen
+				fullyKnown[HGroup](Bob, 4, "g5") andThen
+				preClue[HGroup](Cathy, 4, Seq("green")) andThen
+				preClue[HGroup](Donald, 2, Seq("yellow")) andThen
+				preClue[HGroup](Donald, 3, Seq("3")) andThen
+				preClue[HGroup](Donald, 4, Seq("yellow"))
+		)
+		.pipe(takeTurn("Bob clues purple to Donald"))
+		.pipe(takeTurn("Cathy plays g4", "r3"))
+		.pipe(takeTurn("Donald plays m5", "y3"))
+		.pipe(takeTurn("Alice plays y3 (slot 1)"))
+		.pipe(takeTurn("Bob clues 2 to Alice (slots 2,4)"))
+
+		// Alice still has p2 to complete the purple finesse.
+		hasStatus(game, Alice, 2, CardStatus.Finessed)
+		hasInfs(game, None, Alice, 2, Vector("p2"))
+
+		// Alice also has a trash pushed card on slot 3
+		hasStatus(game, Alice, 3, CardStatus.Finessed)
+		hasInfs(game, None, Alice, 3, Vector("r3", "r4", "y5"))
+
 class TrashFinesse extends munit.FunSuite:
 	override def beforeAll() = Logger.setLevel(LogLevel.Off)
 
@@ -1116,7 +1170,7 @@ class TrashFinesse extends munit.FunSuite:
 			Vector("r2", "y4", "g4", "b4"),
 			Vector("y1", "p3", "p4", "b3")
 		),
-			variant = Variant(17, "Rainbow (6 Suits)", Vector("Red", "Yellow", "Green", "Blue", "Purple", "Rainbow"), shorts = Some(Vector('r', 'y', 'g', 'b', 'p', 'm'))),
+			variant = TestVariant.Rainbow6,
 			starting = Bob,
 			playStacks = Some(Vector(0, 0, 0, 0, 0, 5))
 		)
@@ -1182,3 +1236,70 @@ class TrashFinesse extends munit.FunSuite:
 		val mistakeGame = takeTurn("Alice clues green to Cathy")(game)
 		hasInfs(mistakeGame, None, Cathy, 3, Vector("g5"))
 		assertEquals(mistakeGame.lastMove, Some(ClueInterp.Mistake))
+
+	// From robot1's perspective on https://hanab.live/shared-replay/2076075#9
+	test("recognizes that trash finesses cannot be layered"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx"),
+			Vector("r1", "p2", "r4", "g4"),
+			Vector("g5", "m5", "p1", "r1"),
+			Vector("y2", "r3", "y3", "p5")
+		),
+			playStacks = Some(Vector(0, 2, 0, 0, 1, 1)),
+			variant = TestVariant.Rainbow6
+		)
+		// Alice is not allowed to trash finesse the r1, p2 with the y2.
+		// 2 looks like it follows the r1 play, so it is not seen as
+		// a bluff and the finesse card may not be layered.
+		val mistakeGame = takeTurn("Alice clues 2 to Donald")(game)
+		hasInfs(mistakeGame, None, Donald, 1, Vector("r2", "p2", "m2"))
+		assertEquals(mistakeGame.lastMove, Some(ClueInterp.Mistake))
+
+	// From robot1's perspective on https://hanab.live/shared-replay/2076112#43
+	test("recognizes that trash finesses must be immediately playable"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx"),
+			Vector("y4", "r1", "b1", "r3"),
+			Vector("b4", "g1", "p1", "b2"),
+			Vector("b3", "b2", "b5", "r4")
+		),
+			playStacks = Some(Vector(5, 5, 5, 1, 5)),
+			discarded = Vector("r2", "y1", "y1", "g1", "b3", "p4"),
+			init =
+				preClue[HGroup](Cathy, 4, Seq("blue"))
+		)
+		// Alice is not allowed to trash finesse the b2,b3,b4, with the r4.
+		// The trash finessed id should be immediately playable.
+		val mistakeGame = takeTurn("Alice clues 4 to Donald")(game)
+		hasInfs(mistakeGame, None, Donald, 4, Vector("b4"))
+		assertEquals(mistakeGame.lastMove, Some(ClueInterp.Mistake))
+
+	// From robot1's perspective on https://hanab.live/shared-replay/2076112#20
+	test("prompts skip known trash from trash finesses"):
+		val game = setup(HGroup.atLevel(14), Vector(
+			Vector("xx", "xx", "xx", "xx"),
+			Vector("r3", "g1", "p4", "p4"),
+			Vector("r5", "p5", "p2", "y3"),
+			Vector("r4", "g5", "g4", "r2")
+		),
+			starting = Bob,
+			playStacks = Some(Vector(4, 1, 3, 0, 1)),
+			discarded = Vector("b3"),
+			clueTokens = 1,
+			init =
+				preClue[HGroup](Alice, 3, Seq("purple")) andThen
+				preClue[HGroup](Cathy, 2, Seq("purple")) andThen
+				fullyKnown[HGroup](Cathy, 3, "p2") andThen
+				fullyKnown[HGroup](Donald, 2, "g5") andThen
+				preClue[HGroup](Donald, 3, Seq("green"))
+		)
+		.pipe(takeTurn("Bob clues 1 to Alice (slots 1,4)"))
+		.pipe(takeTurn("Cathy plays r5", "b2"))
+		.pipe(takeTurn("Donald plays g4", "b5"))
+		.pipe(takeTurn("Alice discards y1 (slot 1)"))
+		.pipe(takeTurn("Bob clues blue to Cathy"))
+
+		// Since we know that our clued 1 is trash, we should not consider a prompt.
+		// This should finesse slot 1 as b1.
+		hasStatus(game, Alice, 1, CardStatus.Finessed)
+		hasInfs(game, None, Alice, 1, Vector("b1"))
