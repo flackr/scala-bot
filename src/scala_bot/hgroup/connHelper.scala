@@ -542,7 +542,10 @@ def resolveClue(ctx: ClueContext, fps: Seq[FocusPossibility], symmetricInterp: S
 			g.withMeta(chop)(_.copy(trash = true))
 				.withThought(chop)(t => t.copy(inferred = t.possible.intersect(state.trashSet)))
 		.withMeta(focus)(_.copy(status = CardStatus.Finessed).reason(state.turnCount))
-			.withXMeta(focus)(x => x.copy(turnFinessed = x.turnFinessed.orElse(Some(state.turnCount))))
+			.withXMeta(focus)(x => x.copy(
+				turnFinessed = x.turnFinessed.orElse(Some(state.turnCount)),
+				finesseIds = Some(g.common.thoughts(focus).inferred)
+			))
 
 	.when(_ => writeDischargeNow): g =>
 		val dischargeIds = dischargeFps.foldLeft(IdentitySet.empty)((a, fp) => a.union(fp.ids))
