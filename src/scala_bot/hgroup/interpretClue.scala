@@ -51,7 +51,7 @@ def unacceptableClue(prev: HGroup, game: HGroup, @annotation.unused action: Clue
 	val focus = game.determineFocus(prev, action).focus
 	val stompedTrashFinesse = state.heldOrders.find: o =>
 		prev.provingTrash(o, giver) && (
-			(orders.contains(o) && (focus == o || game.common.thoughts(o).possible.difference(state.trashSet).forall(state.isPlayable))) ||
+			(orders.contains(o) && (focus == o || game.common.orderKp(game, o, excludeTrash = true))) ||
 			game.waiting.exists(w => w.turn == state.turnCount && w.connections.exists(_.order == o))
 		)
 
