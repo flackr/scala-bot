@@ -739,30 +739,42 @@ def findTrashFinesses(ctx: ClueContext, connections: List[Connection], ambiguous
 	if connections.find(c => c.isInstanceOf[FinesseConn] || c.isInstanceOf[PromptConn]).exists(_.reacting == receiver) then
 		return Nil
 
-	var lastPlayer = giver
-	var ci = 0
-	while ci < connections.length &&
-		((ci > 0 && connections(ci - 1).hidden && connections(ci).reacting == lastPlayer) ||
-			inBetween(state.numPlayers, connections(ci).reacting, state.nextPlayerIndex(lastPlayer), receiver)) &&
-		!prev.state.hands(connections(ci).reacting).exists(prev.isBlindPlaying)
-	do
-		lastPlayer = connections(ci).reacting
-		ci += 1
+	@annotation.tailrec
+	def advance(beforePlays: Iterator[Int], conns: List[Connection], lastConn: Option[Connection] = None, count: Int = 0): (Option[Connection], Int) =
+		if beforePlays.isEmpty then
+			(lastConn, count)
+		else
+			conns match
+				case conn :: rest if !prev.state.hands(conn.reacting).exists(prev.isBlindPlaying) =>
+					// Try advancing until the current reacting player
+					val newBeforePlays = beforePlays.dropWhile(_ != conn.reacting)
+
+					// Current reacting player isn't before the receiver
+					if newBeforePlays.isEmpty then
+						(lastConn, count)
+					else
+						// Skip the current reacting player
+						advance(newBeforePlays.drop(1), rest, Some(conn), count + 1)
+				case _ => (lastConn, count)
+
+	val beforePlays = playersUntil(state.numPlayers, state.nextPlayerIndex(giver), receiver)
+	val (lastConn, beforeCount) = advance(beforePlays, connections)
 
 	// If there are plays before the target, check if the play would prove it trash.
 	val playablesRemaining =
-		val base = focusThoughts.possible.filter(!state.isBasicTrash(_))
-		if ci == 0 then
-			base
-		else if connections.head.isBluff then
-			// If we have a bluff connection, we can only eliminate immediate playables or connecting matching ranks.
-			base.filter: id =>
-				!state.isPlayable(id) &&
-				!connections(ci - 1).ids.forall(cid => cid.suitIndex == id.suitIndex && cid.rank >= id.rank)
-		else
-			// Otherwise, we can rule out anything that doesn't follow the connection.
-			base.filter: id =>
-				!connections(ci - 1).ids.forall(cid => cid.suitIndex != id.suitIndex || cid.rank >= id.rank)
+		val base = focusThoughts.possible.difference(state.trashSet)
+		lastConn match
+			case None =>
+				base
+			case Some(conn) if connections.head.isBluff =>
+				// If we have a bluff connection, we can only eliminate immediate playables or connecting matching ranks.
+				base.filter: id =>
+					!state.isPlayable(id) &&
+					!conn.ids.forall(cid => cid.suitIndex == id.suitIndex && cid.rank >= id.rank)
+			case Some(conn) =>
+				// Otherwise, we can rule out anything that doesn't follow the connection.
+				base.filter: id =>
+					!conn.ids.forall(cid => cid.suitIndex != id.suitIndex || cid.rank >= id.rank)
 
 	val noConnectingPlay = playablesRemaining.isEmpty
 	val tfConnections = finalizeConns(connections, givenByUs = giver == state.ourPlayerIndex)
@@ -797,7 +809,7 @@ def findTrashFinesses(ctx: ClueContext, connections: List[Connection], ambiguous
 	if !noConnectingPlay && (game.inEndgame || !validReverse) then
 		return Nil
 
-	val possibleTrash = trashWithReverse(if !game.inEndgame && validReverse then tfConnections.drop(ci) else Nil)
+	val possibleTrash = trashWithReverse(if !game.inEndgame && validReverse then tfConnections.drop(beforeCount) else Nil)
 	if possibleTrash.isEmpty then
 		return Nil
 
