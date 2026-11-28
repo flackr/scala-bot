@@ -69,13 +69,7 @@ def unacceptableClue(prev: HGroup, game: HGroup, @annotation.unused action: Clue
 		game.gainedStatus(game, o, CardStatus.CalledToPlay)
 
 	val badPlay = newPlayables.find: o =>
-		!(
-			game.me.hypoPlays.contains(o) ||
-			(prev.inEndgame && state.deck(o).id().exists(state.isPlayable)) ||
-			(giver != state.ourPlayerIndex && state.ourHand.contains(o) && game.me.thoughts(o).inferred.exists(id =>
-				state.heldOrders.exists(o2 => prev.provingTrash(o2, giver) && prev.common.thoughts(o2).matches(id, infer = true))
-			))
-		)
+		!(game.me.hypoPlays.contains(o) || (prev.inEndgame && state.deck(o).id().exists(state.isPlayable)))
 
 	if badPlay.isDefined then
 		Log.warn(s"clue ${action.fmt(state)} results in ${state.logId(badPlay.get)} ${badPlay.get} looking playable! ${game.me.hypoPlays.fmt}")

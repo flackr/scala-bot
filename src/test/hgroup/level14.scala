@@ -1044,22 +1044,23 @@ class TrashFinesse extends munit.FunSuite:
 		val game = setup(HGroup.atLevel(14), Vector(
 			Vector("xx", "xx", "xx", "xx"),
 			Vector("b5", "b4", "r4", "r1"),
-			Vector("p1", "y2", "y3", "p4"),
-			Vector("r1", "p2", "y1", "b2")
+			Vector("p1", "g1", "y3", "p4"),
+			Vector("r1", "g2", "y1", "b2")
 		),
 			playStacks = Some(Vector(1, 1, 0, 0, 0))
 		)
 		.pipe(takeTurn("Alice clues 1 to Donald"))
 		.tap: g =>
 			hasStatus(g, Cathy, 1, CardStatus.Finessed)
-		.pipe(takeTurn("Bob clues purple to Donald"))
+		.pipe(takeTurn("Bob clues green to Donald"))
 
-		// Since Bob cannot connect p2 through Cathy's p1 without confusing Donald's trash finesse,
-		// Alice should assume p1 is finessed in her own hand instead.
+		// Since Bob cannot layer through Cathy's p1 to reach Cathy's g1 without confusing Donald's
+		// trash finesse, Alice should assume g1 is finessed in her own hand instead.
 		assertEquals(game.lastMove, Some(ClueInterp.Play))
 		hasStatus(game, Alice, 1, CardStatus.Finessed)
-		hasInfs(game, None, Alice, 1, Vector("p1"))
-		hasInfs(game, None, Donald, 2, Vector("p2"))
+		hasStatus(game, Cathy, 2, CardStatus.None)
+		hasInfs(game, None, Alice, 1, Vector("g1"))
+		hasInfs(game, None, Donald, 2, Vector("g2"))
 
 	test("understands a trash finesse where giver knows they have the last id"):
 		val game = setup(HGroup.atLevel(14), Vector(
